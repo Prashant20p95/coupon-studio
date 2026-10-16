@@ -1,0 +1,29 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Output and generated cards
+output_cards/*
+!output_cards/.gitkeep
+
+# Local binaries and tooling
+cloudflared.exe
+*.exe
+
+# Deployment & Environment
+.vercel
+.env
+*.log
+
+# Operating System files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Temporary test/crop artifacts
+crop_*
+fixed_*
+curl_*
+test_*
+raw_tpl_*
