@@ -1,3 +1,12 @@
+---
+title: Umang Coupon Studio
+emoji: 🎫
+colorFrom: blue
+colorTo: indigo
+sdk: docker
+app_port: 7860
+---
+
 # Umang Utsav Event Card Coupon Studio
 
 A complete, high-speed vector coupon generator for Umang Utsav events. Supports single-card live generation and bulk CSV processing (up to 100K+ cards).

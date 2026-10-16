@@ -3,7 +3,7 @@ services:
     name: umang-coupon-studio
     runtime: python
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn -w 2 -b 0.0.0.0:$PORT app:app --timeout 600
+    startCommand: gunicorn -w 1 --threads 8 -b 0.0.0.0:$PORT app:app --timeout 600
     plan: free
     autoDeploy: true
     envVars:

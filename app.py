@@ -26,7 +26,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 if os.path.basename(HERE) == "api":
     HERE = os.path.dirname(HERE)
 
-if os.environ.get("VERCEL"):
+if os.environ.get("VERCEL") or os.environ.get("RENDER") or os.environ.get("SPACE_ID"):
     OUTPUT_DIR = "/tmp/output_cards"
 else:
     OUTPUT_DIR = os.path.join(HERE, "output_cards")
@@ -34,6 +34,33 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # Global Job Registry for Real-time Batch Progress Tracking
 JOBS = {}
+
+def save_job_state(job_id, data):
+    """Persist job state to disk so polling works across processes and threads."""
+    try:
+        meta_p = os.path.join(OUTPUT_DIR, f"job_{job_id}.json")
+        serializable = {k: v for k, v in data.items() if k != "cards"}
+        with open(meta_p, "w", encoding="utf-8") as f:
+            json.dump(serializable, f)
+    except Exception:
+        pass
+
+def get_job_state(job_id):
+    """Retrieve job state from memory or disk cache."""
+    job = JOBS.get(job_id)
+    if job:
+        return job
+    meta_p = os.path.join(OUTPUT_DIR, f"job_{job_id}.json")
+    if os.path.exists(meta_p):
+        try:
+            with open(meta_p, "r", encoding="utf-8") as f:
+                loaded = json.load(f)
+                JOBS[job_id] = loaded
+                return loaded
+        except Exception:
+            pass
+    return None
+
 
 ENTERPRISE_UI_HTML = r"""<!DOCTYPE html>
 <html lang="en">
@@ -2965,6 +2992,12 @@ ENTERPRISE_UI_HTML = r"""<!DOCTYPE html>
 
 def process_batch_worker(job_id, cards, mode, upload_filename="", pdf_size_opt="compact", start_index=0, batch_style=""):
     """Background worker generating print cards with sequence sorting, cancel/resume support, and live progress tracking."""
+    def update_status(patch):
+        if job_id not in JOBS:
+            JOBS[job_id] = {}
+        JOBS[job_id].update(patch)
+        save_job_state(job_id, JOBS[job_id])
+
     t0 = time.time()
     total = len(cards)
     gen = make_cards.FastCardGenerator()
@@ -3049,7 +3082,7 @@ def process_batch_worker(job_id, cards, mode, upload_filename="", pdf_size_opt="
 
                             file_size_mb = round(os.path.getsize(zip_path) / (1024 * 1024), 2) if os.path.exists(zip_path) else 0
                             partial_zip_name = f"{output_name} (Partial {processed} of {total}).zip"
-                            JOBS[job_id].update({
+                            update_status({
                                 "status": "stopped",
                                 "current": processed,
                                 "total": total,
@@ -3061,7 +3094,7 @@ def process_batch_worker(job_id, cards, mode, upload_filename="", pdf_size_opt="
                                 "remaining": total - processed
                             })
                         else:
-                            JOBS[job_id]["status"] = "cancelled"
+                            update_status({"status": "cancelled"})
                             if os.path.exists(zip_path):
                                 try: os.remove(zip_path)
                                 except Exception: pass
@@ -3073,7 +3106,7 @@ def process_batch_worker(job_id, cards, mode, upload_filename="", pdf_size_opt="
                     speed = (processed - start_index) / el if el > 0 else 0
                     rem = (total - processed) / speed if speed > 0 else 0
 
-                    JOBS[job_id].update({
+                    update_status({
                         "current": processed,
                         "percent": round((processed / total) * 100, 1),
                         "current_card": f"Cat {cd['category']} • {cd['name']} (OTP {cd['otp']})",
@@ -3106,7 +3139,7 @@ def process_batch_worker(job_id, cards, mode, upload_filename="", pdf_size_opt="
             file_size_mb = round(os.path.getsize(zip_path) / (1024 * 1024), 2)
             el_total = time.time() - t0
             avg_speed = (total - start_index) / el_total if el_total > 0 else 0
-            JOBS[job_id].update({
+            update_status({
                 "status": "completed",
                 "current": total,
                 "percent": 100.0,
@@ -3144,7 +3177,7 @@ def process_batch_worker(job_id, cards, mode, upload_filename="", pdf_size_opt="
 
                         file_size_mb = os.path.getsize(pdf_path) / (1024 * 1024)
                         partial_filename = f"{output_name} (Cards 1-{i} of {total}).pdf"
-                        JOBS[job_id].update({
+                        update_status({
                             "status": "stopped",
                             "current": i,
                             "total": total,
@@ -3157,7 +3190,7 @@ def process_batch_worker(job_id, cards, mode, upload_filename="", pdf_size_opt="
                         })
                     else:
                         out_doc.close()
-                        JOBS[job_id]["status"] = "cancelled"
+                        update_status({"status": "cancelled"})
                         if os.path.exists(pdf_path):
                             try: os.remove(pdf_path)
                             except Exception: pass
@@ -3170,7 +3203,7 @@ def process_batch_worker(job_id, cards, mode, upload_filename="", pdf_size_opt="
                 speed = session_cards / el if el > 0 else 0
                 rem = (total - processed_now) / speed if speed > 0 else 0
 
-                JOBS[job_id].update({
+                update_status({
                     "current": processed_now,
                     "percent": round((processed_now / total) * 100, 1),
                     "current_card": f"Cat {cd['category']} • {cd['name']} (OTP {cd['otp']})",
@@ -3195,7 +3228,7 @@ def process_batch_worker(job_id, cards, mode, upload_filename="", pdf_size_opt="
             file_size_mb = os.path.getsize(pdf_path) / (1024 * 1024)
             el_total = time.time() - t0
             avg_speed = (total - start_index) / el_total if el_total > 0 else 0
-            JOBS[job_id].update({
+            update_status({
                 "status": "completed",
                 "current": total,
                 "percent": 100.0,
@@ -3207,7 +3240,7 @@ def process_batch_worker(job_id, cards, mode, upload_filename="", pdf_size_opt="
                 "can_resume": False
             })
     except Exception as e:
-        JOBS[job_id].update({
+        update_status({
             "status": "error",
             "error": str(e)
         })
@@ -3898,6 +3931,8 @@ def start_batch():
             "error": None
         }
 
+        save_job_state(job_id, JOBS[job_id])
+
         # Start worker thread with upload filename, pdf_size_opt, and batch_style
         t = threading.Thread(target=process_batch_worker, args=(job_id, sorted_cards, mode, upload_filename, pdf_size_opt, 0, batch_style), daemon=True)
         t.start()
@@ -3911,15 +3946,16 @@ def start_batch():
 
 @app.route("/api/batch_cancel/<job_id>", methods=["POST"])
 def batch_cancel(job_id):
-    job = JOBS.get(job_id)
+    job = get_job_state(job_id)
     if not job:
         return jsonify({"error": "Job not found"}), 404
     job["cancel_requested"] = True
+    save_job_state(job_id, job)
     return jsonify({"success": True})
 
 @app.route("/api/batch_resume/<job_id>", methods=["POST"])
 def batch_resume(job_id):
-    job = JOBS.get(job_id)
+    job = get_job_state(job_id)
     if not job:
         return jsonify({"error": "Job not found"}), 404
     if job.get("status") != "stopped" or not job.get("can_resume"):
@@ -3934,6 +3970,7 @@ def batch_resume(job_id):
 
     job["status"] = "processing"
     job["cancel_requested"] = False
+    save_job_state(job_id, job)
 
     t = threading.Thread(
         target=process_batch_worker,
@@ -3945,7 +3982,7 @@ def batch_resume(job_id):
 
 @app.route("/api/batch_progress/<job_id>")
 def batch_progress(job_id):
-    job = JOBS.get(job_id)
+    job = get_job_state(job_id)
     if not job:
         return jsonify({"error": "Job not found"}), 404
     return jsonify({
@@ -3966,7 +4003,7 @@ def batch_progress(job_id):
 
 @app.route("/api/batch_download/<job_id>")
 def batch_download(job_id):
-    job = JOBS.get(job_id)
+    job = get_job_state(job_id)
     if not job or job.get("status") not in ["completed", "stopped"]:
         return jsonify({"error": "Job output not available"}), 404
     
@@ -3984,6 +4021,6 @@ def batch_download(job_id):
 
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
+    port = int(os.environ.get("PORT", 7860))
     print(f"Umang Utsav Coupon Studio running at http://localhost:{port}")
     app.run(host="0.0.0.0", port=port, debug=False)
